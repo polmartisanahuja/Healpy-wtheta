@@ -12,43 +12,12 @@ hp_version = hp.__version__
 pi = np.pi
 
 #Functions....................................................
-def test():
-	
-	corr = np.loadtxt(corr_file, unpack = True)
-	corr_test = np.loadtxt(corr_file[:-4] + "_test.txt", unpack = True)
-
-	print "\nTest:"
-	
-	if(corr.all() != corr_test.all()):
-		print "Failed"
-		return
-	
-	print "Ok"
-	return
-
-def plot_corr():
-	"""Generates a plot of the angular correlations"""
-
-	plt.close()
-	plt.errorbar(ang, corr, err_corr)
-	plt.axhline( 0, linewidth = 1, color = 'red')
-	plt.xlabel("angle (deg)")
-	plt.ylabel("<map1 * map2>")
-	plt.savefig(corr_plot)
-
-def plot_time():
-	""" Generates a plot of the computation time for each angle bin"""
-	plt.close()
-	plt.plot(ang, t, 'o-')
-	plt.xlabel("angle (deg)")
-	plt.ylabel("Time (seconds)")
-	plt.savefig(time_plot)
-
 def correlations(ang):
 	"""Computes correlations of delta in an angle bin of ang_bin_res resolution. Input angle in radians"""
 	
 	n_ij = np.zeros(N_jk)
-	sum_ij = np.zeros(N_jk)
+	corr_ij = {}
+	for l in corr_list[:-1]: corr_ij[l] = np.zeros(N_jk) 
 	
 	ang_low = (pi / 180) * (ang - (ang_res / 2))
 	ang_high = (pi / 180) * (ang + (ang_res / 2))
@@ -62,33 +31,45 @@ def correlations(ang):
 		disc = np.setdiff1d(disc_high, disc_low) #Takes non-overlaped pixels 
 		
 		k = hp.vec2pix(nside_jk, i_vec[0], i_vec[1], i_vec[2]) #Looking for which jackknife pixel corresponds to
-
-		sum_ij[k] += map1[i] * map2_masked[disc].sum()
+		
+		corr_ij['n_auto'][k] += n_map[i] * n_map_masked[disc].sum()
+		corr_ij['od_auto'][k] += od_map[i] * od_map_masked[disc].sum()
+		corr_ij['cross'][k] += n_map[i] * od_map_masked[disc].sum()
 		n_ij[k] += mask_map[disc].sum()
-
 	
 	#Take non-zero elements
-	#sum_ij = sum_ij[np.nonzero(sum_ij)]	
-	sum_ij = sum_ij[np.nonzero(n_ij)]	
+	for l in corr_list[:-1]: corr_ij[l] = corr_ij[l][np.nonzero(n_ij)]
 	n_ij = n_ij[np.nonzero(n_ij)]	
-	K = len(sum_ij)
+	K = len(corr_ij['n_auto'])
+
+	#Mean correlations
+	mean = {}
+	for l in corr_list[:-1]: mean[l] = corr_ij[l].sum() / n_ij.sum()
+	mean['n_auto_corrected'] = mean['n_auto'] - mean['cross'] * mean['cross'] / mean['od_auto'] 
 
 	#Jackknife correlations
-	corr = np.empty(K)
-	for k in range(K): corr[k] = (sum_ij.sum() - sum_ij[k]) / (n_ij.sum() - n_ij[k])
+	kcorr_ij = {} 
+	for l in corr_list[:-1]:
+		kcorr_ij[l] = np.empty(K)
+		for k in range(K):
+			kcorr_ij[l][k] = (corr_ij[l].sum() - corr_ij[l][k]) / (n_ij.sum() - n_ij[k])
+	kcorr_ij['n_auto_corrected'] = np.empty(K)
 	
-	#Mean correlations
-	mean_corr =  sum_ij.sum() / n_ij.sum()
-	
+
+	for k in range(K): kcorr_ij['n_auto_corrected'][k] = kcorr_ij['n_auto'][k] - kcorr_ij['cross'][k] * kcorr_ij['cross'][k] / kcorr_ij['od_auto'][k] 
+		
 	#Error correlation
-	err_corr = 0
-	for k in range(K): err_corr += (corr[k] - mean_corr) * (corr[k] - mean_corr)
-	err_corr = math.sqrt(((float(K) - 1.) / float(K)) * err_corr)
+	err_corr = {}
+	print "\n#Theta = %4.4f" % ang
+	for l in corr_list:
+		err_corr[l] = 0
+		for k in range(K): err_corr[l] += (kcorr_ij[l][k] - mean[l]) * (kcorr_ij[l][k] - mean[l]) 
+		err_corr[l] = math.sqrt(((float(K) - 1.) / float(K)) * err_corr[l])
+		print "%s: %7.7f, %7.7f" % (l, mean[l], err_corr[l])
 
 	t = time.clock() - t0
 
-	print "\tAng, Corr, Err_corr = %4.4f, %7.7f, %7.7f" % (ang, mean_corr, err_corr)
-	return mean_corr, err_corr, t
+	return mean, err_corr, t
 
 #MAIN..........................................................
 
@@ -99,8 +80,8 @@ print "*                                        *"
 print "******************************************"
 
 #Loading maps 
-map1 = hp.read_map(map1_file)
-map2 = hp.read_map(map2_file)
+n_map = hp.read_map(n_map_file)
+od_map = hp.read_map(od_map_file)
 
 #Loading mask
 mask_map = hp.read_map(mask_file)
@@ -108,15 +89,17 @@ mask_map = hp.read_map(mask_file)
 #Getting pixel index in the mask
 mask = np.nonzero(mask_map)[0]
 
-mean_map1 = (map1 * mask_map).sum() / mask_map.sum()
-mean_map2 = (map2 * mask_map).sum() / mask_map.sum()
+mean_n_map = (n_map * mask_map).sum() / mask_map.sum()
+mean_od_map = (od_map * mask_map).sum() / mask_map.sum()
 
-print "mean_map1=", mean_map1
-print "mean_map2=", mean_map2
+print "mean_n_map=", mean_n_map
+print "mean_od_map =", mean_od_map
 
-map1 = (map1 / mean_map1) - 1. 
-map2 = (map2 / mean_map2) - 1. 
-map2_masked = mask_map * map2
+n_map = (n_map / mean_n_map) - 1. 
+od_map = (od_map / mean_od_map) - 1. 
+
+n_map_masked = mask_map * n_map
+od_map_masked = mask_map * od_map
 
 #Computing correlations in parallel
 ang = np.arange(1.5 * ang_res, ang_max, ang_res)
@@ -127,20 +110,15 @@ res = po.map(correlations, ang)
 T = time.time() - T0
 print "\tTotal time = %1.1f sec" % T 
 
-corr = []
-err_corr = []
-t = []
-for val in res: 
-	corr = np.append(corr, val[0])
-	err_corr = np.append(err_corr, val[1])
-	t = np.append(t, val[2])
+for l in corr_list:
+	corr = []
+	err_corr = []
+	t = []
+	for val in res: 
+		corr = np.append(corr, val[0][l])
+		err_corr = np.append(err_corr, val[1][l])
+		t = np.append(t, val[2])
 
-#Plots
-plot_corr()
-plot_time()
-
-#Writting correlations 
-np.savetxt(corr_file, np.array([ang, corr, err_corr]).T)
-
-#Testing
-test()
+	#Writting correlations 
+	corr_file = "corr/" + l + "_od" + od + ".txt" 
+	np.savetxt(corr_file, np.array([ang, corr, err_corr]).T)

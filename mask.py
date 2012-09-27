@@ -59,10 +59,10 @@ print "*                                        *"
 print "******************************************"
 
 print "Reading map..."
-hist_pix = hp.read_map(map_file)
+hist_pix = hp.read_map(n_map_file)
 
 print "Creating the mask..."
 mask_map = mask(hist_pix)
 
-print "Writing mask..."
+print "\nWriting mask..."
 hp.write_map(mask_file, mask_map)
