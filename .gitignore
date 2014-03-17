@@ -1,7 +1,6 @@
 *.py[co]
 corr_martin_versions/
 other/
-.*
 
 # Packages
 *.egg
